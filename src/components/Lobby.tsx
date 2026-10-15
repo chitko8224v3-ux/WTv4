@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ActiveRoomInfo } from '../types';
 import { RecentRoom } from '../utils/roomRegistry';
 import { Film, Users, RefreshCw, Plus, ArrowRight } from 'lucide-react';
@@ -18,6 +18,16 @@ interface LobbyProps {
   onCreateRoom: (name: string, initialMediaUrl?: string) => void;
   onJoinRoom: (name: string, code: string) => void;
   onOpenLibrary?: () => void;
+}
+
+function formatRoomTimeAgo(timestamp?: number): string {
+  if (!timestamp) return '';
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSec < 45) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  return `${diffHr}h ago`;
 }
 
 export function Lobby({
@@ -62,6 +72,15 @@ export function Lobby({
     setCode(cleanCode);
     onJoinRoom(getFinalName(), cleanCode);
   };
+
+  // Always sort available rooms so the latest created/active rooms are at the very top
+  const sortedRooms = useMemo(() => {
+    return [...activeRooms].sort((a, b) => {
+      const timeA = a.createdAt || a.lastSeen || 0;
+      const timeB = b.createdAt || b.lastSeen || 0;
+      return timeB - timeA;
+    });
+  }, [activeRooms]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-[#090b10] text-[#eceef5]">
@@ -129,22 +148,17 @@ export function Lobby({
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
                   <span
-                    className={`absolute inline-flex h-full w-full rounded-full ${
-                      activeRooms.length > 0 ? 'bg-emerald-400 animate-ping opacity-75' : 'bg-slate-600'
-                    }`}
-                  />
-                  <span
-                    className={`relative inline-flex rounded-full h-2 w-2 ${
-                      activeRooms.length > 0 ? 'bg-emerald-500' : 'bg-slate-600'
+                    className={`inline-flex rounded-full h-2 w-2 ${
+                      sortedRooms.length > 0 ? 'bg-emerald-500' : 'bg-slate-600'
                     }`}
                   />
                 </span>
                 <span className="text-xs font-medium text-slate-300">
                   Available Rooms
                 </span>
-                {activeRooms.length > 0 && (
+                {sortedRooms.length > 0 && (
                   <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full border border-emerald-500/20">
-                    {activeRooms.length}
+                    {sortedRooms.length}
                   </span>
                 )}
               </div>
@@ -152,7 +166,7 @@ export function Lobby({
                 onClick={onRefreshRooms}
                 disabled={isLoadingRooms}
                 className="text-slate-400 hover:text-white transition-colors p-1 rounded-md cursor-pointer disabled:opacity-50"
-                title="Refresh rooms"
+                title="Refresh available rooms"
               >
                 <RefreshCw
                   className={`w-3.5 h-3.5 ${isLoadingRooms ? 'animate-spin text-indigo-400' : ''}`}
@@ -160,22 +174,32 @@ export function Lobby({
               </button>
             </div>
 
-            {activeRooms.length > 0 ? (
+            {sortedRooms.length > 0 ? (
               <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
-                {activeRooms.map((r) => (
+                {sortedRooms.map((r, idx) => (
                   <div
                     key={r.code}
                     onClick={() => handleDirectJoinRoom(r.code)}
                     className="group flex items-center justify-between p-2.5 rounded-xl bg-[#161924] hover:bg-[#1c2130] border border-white/[0.06] hover:border-indigo-500/40 transition-all cursor-pointer"
                   >
                     <div className="min-w-0 flex-1 pr-2">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-mono font-bold text-xs text-sky-400 group-hover:text-indigo-300">
                           {r.code}
                         </span>
-                        <span className="text-[11px] text-slate-400 truncate">
+                        <span className="text-[11px] text-slate-400 truncate max-w-[90px]">
                           by {r.hostName}
                         </span>
+                        {idx === 0 && (
+                          <span className="text-[9px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 rounded-full">
+                            Latest
+                          </span>
+                        )}
+                        {r.createdAt && (
+                          <span className="text-[10px] text-slate-500 font-normal">
+                            • {formatRoomTimeAgo(r.createdAt)}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-slate-300 truncate mt-0.5">
                         {r.movieTitle || 'In Lobby'}
@@ -192,7 +216,7 @@ export function Lobby({
                           e.stopPropagation();
                           handleDirectJoinRoom(r.code);
                         }}
-                        className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600/30 group-hover:bg-indigo-600 text-indigo-200 group-hover:text-white transition-colors flex items-center gap-1"
+                        className="text-xs font-medium px-2.5 py-1 rounded-lg bg-indigo-600/30 group-hover:bg-indigo-600 text-indigo-200 group-hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
                       >
                         <span>Join</span>
                         <ArrowRight className="w-3 h-3" />

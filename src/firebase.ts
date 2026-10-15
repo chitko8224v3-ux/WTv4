@@ -13,6 +13,7 @@ import {
   setDoc,
   deleteDoc,
   getDocFromServer,
+  getDocs,
   onSnapshot,
   query,
   limit,
@@ -154,6 +155,30 @@ export async function deleteRoomFromFirestore(roomCode: string): Promise<void> {
     await deleteDoc(roomRef);
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, roomPath);
+  }
+}
+
+export async function fetchFirestoreRooms(): Promise<ActiveRoomInfo[]> {
+  const roomsPath = 'rooms';
+  const q = query(collection(db, roomsPath), limit(25));
+  try {
+    const snapshot = await getDocs(q);
+    const rooms: ActiveRoomInfo[] = [];
+    snapshot.forEach((docSnap) => {
+      const d = docSnap.data();
+      rooms.push({
+        code: d.code || docSnap.id,
+        hostName: d.hostName || 'Host',
+        movieTitle: d.movieTitle || 'Video Stream',
+        movieUrl: d.movieUrl || '',
+        viewerCount: d.viewerCount || 1,
+        createdAt: d.createdAt ? new Date(d.createdAt).getTime() : Date.now(),
+        lastSeen: d.lastSeen || Date.now(),
+      });
+    });
+    return rooms.sort((a, b) => (b.createdAt || b.lastSeen || 0) - (a.createdAt || a.lastSeen || 0));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, roomsPath);
   }
 }
 

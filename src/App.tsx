@@ -37,7 +37,6 @@ import {
   getRecentRooms,
   addRecentRoom,
   clearRecentRooms,
-  subscribeToRoomBroadcasts,
   RecentRoom,
 } from './utils/roomRegistry';
 import {
@@ -50,7 +49,7 @@ import {
   signOutUser,
   saveRoomToFirestore,
   deleteRoomFromFirestore,
-  subscribeToFirestoreRooms,
+  fetchFirestoreRooms,
 } from './firebase';
 import { User, onAuthStateChanged } from 'firebase/auth';
 
@@ -118,14 +117,23 @@ export default function App() {
   const loadRooms = useCallback(async () => {
     setIsLoadingRooms(true);
     try {
-      const rooms = await fetchActiveRooms();
-      setActiveRooms(rooms);
+      const [apiRooms, fireRooms] = await Promise.all([
+        fetchActiveRooms(),
+        fetchFirestoreRooms().catch(() => [] as ActiveRoomInfo[]),
+      ]);
+      const map = new Map<string, ActiveRoomInfo>();
+      apiRooms.forEach((r) => map.set(r.code, r));
+      (fireRooms || []).forEach((r) => map.set(r.code, r));
+      const sortedRooms = Array.from(map.values()).sort(
+        (a, b) => (b.createdAt || b.lastSeen || 0) - (a.createdAt || a.lastSeen || 0)
+      );
+      setActiveRooms(sortedRooms);
     } finally {
       setIsLoadingRooms(false);
     }
   }, []);
 
-  // Firebase auth state and real-time Firestore room subscription
+  // Firebase auth state
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
@@ -134,37 +142,16 @@ export default function App() {
       }
     });
 
-    const unsubFirestoreRooms = subscribeToFirestoreRooms((fireRooms) => {
-      if (fireRooms && fireRooms.length > 0) {
-        setActiveRooms((prev) => {
-          const map = new Map<string, ActiveRoomInfo>();
-          prev.forEach((r) => map.set(r.code, r));
-          fireRooms.forEach((r) => map.set(r.code, r));
-          return Array.from(map.values());
-        });
-      }
-    });
-
     return () => {
       unsubAuth();
-      unsubFirestoreRooms();
     };
   }, [myName]);
 
-  // Poll available rooms when on lobby screen
+  // Load available rooms on initial view or when leaving a room (no automatic continuous refresh)
   useEffect(() => {
     if (inRoom) return;
     loadRooms();
     setRecentRooms(getRecentRooms());
-    const interval = setInterval(loadRooms, 2500);
-    const unsubscribe = subscribeToRoomBroadcasts((updatedRooms) => {
-      setActiveRooms(updatedRooms);
-      setRecentRooms(getRecentRooms());
-    });
-    return () => {
-      clearInterval(interval);
-      unsubscribe();
-    };
   }, [inRoom, loadRooms]);
 
   // Sync isCurrentSavedSample whenever currentUrl changes
@@ -594,6 +581,7 @@ export default function App() {
           lastSeen: Date.now(),
         };
         registerActiveRoom(roomObj);
+        setActiveRooms((prev) => [roomObj, ...prev.filter((r) => r.code !== code)]);
         saveRoomToFirestore(roomObj).catch(() => {});
 
         // Periodic host sync heartbeat tick and room registry update

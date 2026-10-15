@@ -38,10 +38,14 @@ try {
   }
 } catch {}
 
+function sortRoomsByLatest(rooms: ActiveRoomInfo[]): ActiveRoomInfo[] {
+  return [...rooms].sort((a, b) => (b.createdAt || b.lastSeen || 0) - (a.createdAt || a.lastSeen || 0));
+}
+
 function updateCachedRooms(rooms: ActiveRoomInfo[]) {
-  cachedActiveRooms = rooms;
+  cachedActiveRooms = sortRoomsByLatest(rooms);
   try {
-    localStorage.setItem(CACHED_ROOMS_KEY, JSON.stringify(rooms));
+    localStorage.setItem(CACHED_ROOMS_KEY, JSON.stringify(cachedActiveRooms));
   } catch {}
   for (const fn of listeners) {
     try {
@@ -61,37 +65,7 @@ function removeLocalRoom(code: string) {
   updateCachedRooms(filtered);
 }
 
-// SSE Connection to server for instant room updates (<50ms)
-let eventSource: EventSource | null = null;
-
-function initSSE() {
-  if (typeof window === 'undefined' || !('EventSource' in window)) return;
-  if (eventSource) return;
-  try {
-    eventSource = new EventSource('/api/rooms/stream');
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (Array.isArray(data.rooms)) {
-          updateCachedRooms(data.rooms);
-          if (channel) {
-            channel.postMessage({ type: 'rooms_updated', rooms: data.rooms });
-          }
-        }
-      } catch {}
-    };
-    eventSource.onerror = () => {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      // Reconnect after 3s
-      setTimeout(initSSE, 3000);
-    };
-  } catch {}
-}
-
-initSSE();
+// Automatic SSE room stream disabled as automatic room refresh is disabled
 
 export async function fetchActiveRooms(): Promise<ActiveRoomInfo[]> {
   try {
@@ -99,8 +73,9 @@ export async function fetchActiveRooms(): Promise<ActiveRoomInfo[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.rooms)) {
-        updateCachedRooms(data.rooms);
-        return data.rooms;
+        const sorted = sortRoomsByLatest(data.rooms);
+        updateCachedRooms(sorted);
+        return sorted;
       }
     }
   } catch (err) {
@@ -108,7 +83,7 @@ export async function fetchActiveRooms(): Promise<ActiveRoomInfo[]> {
   }
   // Fallback to cache if available
   if (cachedActiveRooms.length > 0) {
-    return cachedActiveRooms;
+    return sortRoomsByLatest(cachedActiveRooms);
   }
   return [];
 }

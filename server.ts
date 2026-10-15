@@ -27,7 +27,7 @@ function getFilteredActiveRooms(): ActiveRoom[] {
   // Keep active rooms for up to 10 minutes without heartbeat (prevents background tab throttling drops)
   return Array.from(rooms.values())
     .filter((r) => now - r.lastSeen <= 600000)
-    .sort((a, b) => b.lastSeen - a.lastSeen);
+    .sort((a, b) => (b.createdAt || b.lastSeen || 0) - (a.createdAt || a.lastSeen || 0));
 }
 
 function broadcastRooms() {
