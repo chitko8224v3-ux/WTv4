@@ -20,16 +20,6 @@ interface LobbyProps {
   onOpenLibrary?: () => void;
 }
 
-function formatRoomTimeAgo(timestamp?: number): string {
-  if (!timestamp) return '';
-  const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (diffSec < 45) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  return `${diffHr}h ago`;
-}
-
 export function Lobby({
   initialCode = '',
   initialName,
@@ -183,23 +173,13 @@ export function Lobby({
                     className="group flex items-center justify-between p-2.5 rounded-xl bg-[#161924] hover:bg-[#1c2130] border border-white/[0.06] hover:border-indigo-500/40 transition-all cursor-pointer"
                   >
                     <div className="min-w-0 flex-1 pr-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
+                      <div className="flex items-center gap-1.5">
                         <span className="font-mono font-bold text-xs text-sky-400 group-hover:text-indigo-300">
                           {r.code}
                         </span>
-                        <span className="text-[11px] text-slate-400 truncate max-w-[90px]">
+                        <span className="text-[11px] text-slate-400 truncate">
                           by {r.hostName}
                         </span>
-                        {idx === 0 && (
-                          <span className="text-[9px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.2 rounded-full">
-                            Latest
-                          </span>
-                        )}
-                        {r.createdAt && (
-                          <span className="text-[10px] text-slate-500 font-normal">
-                            • {formatRoomTimeAgo(r.createdAt)}
-                          </span>
-                        )}
                       </div>
                       <p className="text-[11px] text-slate-300 truncate mt-0.5">
                         {r.movieTitle || 'In Lobby'}
