@@ -61,37 +61,7 @@ function removeLocalRoom(code: string) {
   updateCachedRooms(filtered);
 }
 
-// SSE Connection to server for instant room updates (<50ms)
-let eventSource: EventSource | null = null;
 
-function initSSE() {
-  if (typeof window === 'undefined' || !('EventSource' in window)) return;
-  if (eventSource) return;
-  try {
-    eventSource = new EventSource('/api/rooms/stream');
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (Array.isArray(data.rooms)) {
-          updateCachedRooms(data.rooms);
-          if (channel) {
-            channel.postMessage({ type: 'rooms_updated', rooms: data.rooms });
-          }
-        }
-      } catch {}
-    };
-    eventSource.onerror = () => {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      // Reconnect after 3s
-      setTimeout(initSSE, 3000);
-    };
-  } catch {}
-}
-
-initSSE();
 
 export async function fetchActiveRooms(): Promise<ActiveRoomInfo[]> {
   try {

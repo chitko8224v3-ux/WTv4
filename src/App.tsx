@@ -10,7 +10,6 @@ import {
   RefreshCw,
   Share2,
   Star,
-  Loader2,
 } from 'lucide-react';
 import { Player } from './components/Player';
 import { Sidebar } from './components/Sidebar';
@@ -38,7 +37,6 @@ import {
   getRecentRooms,
   addRecentRoom,
   clearRecentRooms,
-  subscribeToRoomBroadcasts,
   RecentRoom,
 } from './utils/roomRegistry';
 import {
@@ -51,7 +49,7 @@ import {
   signOutUser,
   saveRoomToFirestore,
   deleteRoomFromFirestore,
-  subscribeToFirestoreRooms,
+  fetchFirestoreRooms,
 } from './firebase';
 import { User, onAuthStateChanged } from 'firebase/auth';
 
@@ -85,11 +83,6 @@ export default function App() {
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
   const [theaterMode, setTheaterMode] = useState(false);
   const [drift, setDrift] = useState(0);
-  const [mediaLoading, setMediaLoading] = useState<{ loading: boolean; progress: number; stage: string }>({
-    loading: false,
-    progress: 0,
-    stage: '',
-  });
   const [desiredState, setDesiredState] = useState<DesiredPlaybackState>({
     playing: false,
     time: 0,
@@ -124,14 +117,20 @@ export default function App() {
   const loadRooms = useCallback(async () => {
     setIsLoadingRooms(true);
     try {
-      const rooms = await fetchActiveRooms();
-      setActiveRooms(rooms);
+      const [apiRooms, fireRooms] = await Promise.all([
+        fetchActiveRooms().catch(() => []),
+        fetchFirestoreRooms().catch(() => []),
+      ]);
+      const map = new Map<string, ActiveRoomInfo>();
+      (apiRooms || []).forEach((r) => map.set(r.code, r));
+      (fireRooms || []).forEach((r) => map.set(r.code, r));
+      setActiveRooms(Array.from(map.values()));
     } finally {
       setIsLoadingRooms(false);
     }
   }, []);
 
-  // Firebase auth state and real-time Firestore room subscription
+  // Firebase auth state
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
@@ -140,37 +139,16 @@ export default function App() {
       }
     });
 
-    const unsubFirestoreRooms = subscribeToFirestoreRooms((fireRooms) => {
-      if (fireRooms && fireRooms.length > 0) {
-        setActiveRooms((prev) => {
-          const map = new Map<string, ActiveRoomInfo>();
-          prev.forEach((r) => map.set(r.code, r));
-          fireRooms.forEach((r) => map.set(r.code, r));
-          return Array.from(map.values());
-        });
-      }
-    });
-
     return () => {
       unsubAuth();
-      unsubFirestoreRooms();
     };
   }, [myName]);
 
-  // Poll available rooms when on lobby screen
+  // Load available rooms initially on lobby entry without automatic refresh
   useEffect(() => {
     if (inRoom) return;
     loadRooms();
     setRecentRooms(getRecentRooms());
-    const interval = setInterval(loadRooms, 2500);
-    const unsubscribe = subscribeToRoomBroadcasts((updatedRooms) => {
-      setActiveRooms(updatedRooms);
-      setRecentRooms(getRecentRooms());
-    });
-    return () => {
-      clearInterval(interval);
-      unsubscribe();
-    };
   }, [inRoom, loadRooms]);
 
   // Sync isCurrentSavedSample whenever currentUrl changes
@@ -359,7 +337,6 @@ export default function App() {
           break;
         }
         case 'load': {
-          setMediaLoading({ loading: true, progress: 20, stage: 'Connecting to video stream...' });
           addSystemMessage(`${m.from || 'Someone'} loaded: ${m.title || 'New video'}`);
           enqueue(async () => {
             currentUrlRef.current = m.url;
@@ -814,7 +791,6 @@ export default function App() {
         return;
       }
       const displayTitle = title || formatUrlTitle(clean);
-      setMediaLoading({ loading: true, progress: 20, stage: 'Connecting to link...' });
       addSystemMessage(`You loaded: ${displayTitle}`);
       enqueue(() => {
         currentUrlRef.current = clean;
@@ -846,7 +822,6 @@ export default function App() {
 
   // Player finished loading media metadata
   const handlePlayerReady = useCallback(() => {
-    setMediaLoading({ loading: false, progress: 100, stage: 'Ready' });
     if (!isHostRef.current) {
       send({ t: 'sync' });
     }
@@ -1012,40 +987,22 @@ export default function App() {
               e.preventDefault();
               handleLoadUrl(urlInput);
             }}
-            className="flex-1 flex flex-col relative"
+            className="flex-1 flex gap-2"
           >
-            <div className="flex gap-2 relative">
-              <input
-                type="url"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="Paste movie link (.mp4 / .webm / .m3u8 / YouTube)..."
-                className="w-full bg-[#181a26] border border-white/10 focus:border-indigo-500 rounded-xl px-3.5 py-1.5 text-xs text-white placeholder-slate-500 outline-none transition-all"
-              />
-              <button
-                type="submit"
-                disabled={!urlInput.trim() || mediaLoading.loading}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-500 to-sky-500 hover:brightness-110 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 min-w-[76px]"
-              >
-                {mediaLoading.loading ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
-                    <span>{mediaLoading.progress}%</span>
-                  </>
-                ) : (
-                  <span>Load</span>
-                )}
-              </button>
-            </div>
-            {/* Ambient loading progress bar under input */}
-            {mediaLoading.loading && (
-              <div className="absolute -bottom-1 inset-x-1 h-0.5 bg-white/10 rounded-full overflow-hidden pointer-events-none">
-                <div
-                  className="h-full bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 transition-all duration-300 ease-out"
-                  style={{ width: `${mediaLoading.progress}%` }}
-                />
-              </div>
-            )}
+            <input
+              type="url"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="Paste movie link (.mp4 / .webm / .m3u8 / YouTube)..."
+              className="w-full bg-[#181a26] border border-white/10 focus:border-indigo-500 rounded-xl px-3.5 py-1.5 text-xs text-white placeholder-slate-500 outline-none transition-all"
+            />
+            <button
+              type="submit"
+              disabled={!urlInput.trim()}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-500 to-sky-500 hover:brightness-110 text-white shadow disabled:opacity-40 disabled:cursor-not-allowed transition-all whitespace-nowrap cursor-pointer"
+            >
+              Load
+            </button>
           </form>
           <button
             onClick={() => setIsLibraryOpen(true)}
@@ -1108,53 +1065,35 @@ export default function App() {
       </header>
 
       {/* Mobile Stream URL Input Bar */}
-      <div className="md:hidden p-2.5 bg-[#141621] border-b border-white/10 flex flex-col gap-1.5 shrink-0">
-        <div className="flex items-center gap-2">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleLoadUrl(urlInput);
-            }}
-            className="flex-1 flex gap-2"
-          >
-            <input
-              type="url"
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="Paste video (.mp4 / .m3u8 / YouTube)..."
-              className="w-full bg-[#1b1e2c] border border-white/10 focus:border-indigo-500 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none"
-            />
-            <button
-              type="submit"
-              disabled={mediaLoading.loading || !urlInput.trim()}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 text-white shadow flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer min-w-[65px]"
-            >
-              {mediaLoading.loading ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin text-white" />
-                  <span>{mediaLoading.progress}%</span>
-                </>
-              ) : (
-                <span>Load</span>
-              )}
-            </button>
-          </form>
+      <div className="md:hidden p-2.5 bg-[#141621] border-b border-white/10 flex items-center gap-2 shrink-0">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleLoadUrl(urlInput);
+          }}
+          className="flex-1 flex gap-2"
+        >
+          <input
+            type="url"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            placeholder="Paste video (.mp4 / .m3u8 / YouTube)..."
+            className="w-full bg-[#1b1e2c] border border-white/10 focus:border-indigo-500 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none"
+          />
           <button
-            onClick={() => setIsLibraryOpen(true)}
-            className="p-2 rounded-xl bg-white/5 border border-white/10 text-indigo-300 cursor-pointer"
-            title="Movie Library"
+            type="submit"
+            className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 text-white shadow cursor-pointer"
           >
-            <Sparkles className="w-4 h-4" />
+            Load
           </button>
-        </div>
-        {mediaLoading.loading && (
-          <div className="h-0.5 w-full bg-white/10 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 transition-all duration-300 ease-out"
-              style={{ width: `${mediaLoading.progress}%` }}
-            />
-          </div>
-        )}
+        </form>
+        <button
+          onClick={() => setIsLibraryOpen(true)}
+          className="p-2 rounded-xl bg-white/5 border border-white/10 text-indigo-300 cursor-pointer"
+          title="Movie Library"
+        >
+          <Sparkles className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Main Grid Viewport */}
@@ -1188,9 +1127,6 @@ export default function App() {
               onOpenLibrary={() => setIsLibraryOpen(true)}
               theaterMode={theaterMode}
               onToggleTheater={() => setTheaterMode(!theaterMode)}
-              onLoadProgress={(progress, stage, isLoading) => {
-                setMediaLoading({ loading: isLoading, progress, stage });
-              }}
             />
 
             {/* Movie Info & Quick Actions Bar */}
