@@ -37,6 +37,7 @@ import {
   getRecentRooms,
   addRecentRoom,
   clearRecentRooms,
+  subscribeToRoomBroadcasts,
   RecentRoom,
 } from './utils/roomRegistry';
 import {
@@ -49,7 +50,7 @@ import {
   signOutUser,
   saveRoomToFirestore,
   deleteRoomFromFirestore,
-  fetchFirestoreRooms,
+  subscribeToFirestoreRooms,
 } from './firebase';
 import { User, onAuthStateChanged } from 'firebase/auth';
 
@@ -117,20 +118,14 @@ export default function App() {
   const loadRooms = useCallback(async () => {
     setIsLoadingRooms(true);
     try {
-      const [apiRooms, fireRooms] = await Promise.all([
-        fetchActiveRooms().catch(() => []),
-        fetchFirestoreRooms().catch(() => []),
-      ]);
-      const map = new Map<string, ActiveRoomInfo>();
-      (apiRooms || []).forEach((r) => map.set(r.code, r));
-      (fireRooms || []).forEach((r) => map.set(r.code, r));
-      setActiveRooms(Array.from(map.values()));
+      const rooms = await fetchActiveRooms();
+      setActiveRooms(rooms);
     } finally {
       setIsLoadingRooms(false);
     }
   }, []);
 
-  // Firebase auth state
+  // Firebase auth state and real-time Firestore room subscription
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
@@ -139,16 +134,37 @@ export default function App() {
       }
     });
 
+    const unsubFirestoreRooms = subscribeToFirestoreRooms((fireRooms) => {
+      if (fireRooms && fireRooms.length > 0) {
+        setActiveRooms((prev) => {
+          const map = new Map<string, ActiveRoomInfo>();
+          prev.forEach((r) => map.set(r.code, r));
+          fireRooms.forEach((r) => map.set(r.code, r));
+          return Array.from(map.values());
+        });
+      }
+    });
+
     return () => {
       unsubAuth();
+      unsubFirestoreRooms();
     };
   }, [myName]);
 
-  // Load available rooms initially on lobby entry without automatic refresh
+  // Poll available rooms when on lobby screen
   useEffect(() => {
     if (inRoom) return;
     loadRooms();
     setRecentRooms(getRecentRooms());
+    const interval = setInterval(loadRooms, 2500);
+    const unsubscribe = subscribeToRoomBroadcasts((updatedRooms) => {
+      setActiveRooms(updatedRooms);
+      setRecentRooms(getRecentRooms());
+    });
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
   }, [inRoom, loadRooms]);
 
   // Sync isCurrentSavedSample whenever currentUrl changes

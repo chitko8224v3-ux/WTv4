@@ -20,7 +20,6 @@ import {
   Smile,
   GripHorizontal,
   Move,
-  Loader2,
 } from 'lucide-react';
 import { FloatingReaction, PlayerHandle, DesiredPlaybackState, ChatMessageItem, PeerUser } from '../types';
 import { playReactionSound } from '../utils/sound';
@@ -93,7 +92,6 @@ interface PlayerProps {
   onOpenLibrary: () => void;
   theaterMode: boolean;
   onToggleTheater: () => void;
-  onLoadProgress?: (progress: number, stage: string, isLoading: boolean) => void;
 }
 
 export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
@@ -116,7 +114,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     onOpenLibrary,
     theaterMode,
     onToggleTheater,
-    onLoadProgress,
   },
   ref
 ) {
@@ -136,40 +133,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
   const [showTapToPlay, setShowTapToPlay] = useState(false);
   const [isControlsVisible, setIsControlsVisible] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  // Video loading progress tracking
-  const [isMediaLoading, setIsMediaLoading] = useState(false);
-  const [mediaProgress, setMediaProgress] = useState(0);
-  const [loadStageText, setLoadStageText] = useState('Connecting to stream...');
-  const progressTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const loadCompleteTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const updateProgress = useCallback(
-    (progress: number, stage: string, stillLoading = true) => {
-      setMediaProgress(progress);
-      setLoadStageText(stage);
-      if (stillLoading) {
-        setIsMediaLoading(true);
-      }
-      onLoadProgress?.(progress, stage, stillLoading);
-    },
-    [onLoadProgress]
-  );
-
-  const finishLoading = useCallback(
-    (stage = 'Stream ready!') => {
-      if (progressTimerRef.current) {
-        clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null;
-      }
-      updateProgress(100, stage, false);
-      if (loadCompleteTimeoutRef.current) clearTimeout(loadCompleteTimeoutRef.current);
-      loadCompleteTimeoutRef.current = setTimeout(() => {
-        setIsMediaLoading(false);
-      }, 450);
-    },
-    [updateProgress]
-  );
 
   // Fullscreen floating toasts and chat state
   const [fsToasts, setFsToasts] = useState<{
@@ -531,17 +494,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
 
   // Clean up previous players when url changes
   const destroyCurrentPlayer = useCallback(() => {
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-    if (loadCompleteTimeoutRef.current) {
-      clearTimeout(loadCompleteTimeoutRef.current);
-      loadCompleteTimeoutRef.current = null;
-    }
-    setIsMediaLoading(false);
-    setMediaProgress(0);
-
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
@@ -578,30 +530,12 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     destroyCurrentPlayer();
     const media = parseMediaUrl(url);
     setKind(media.kind);
-
-    // Start progress indication immediately
-    updateProgress(18, 'Connecting to media source...', true);
-
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    progressTimerRef.current = setInterval(() => {
-      setMediaProgress((prev) => {
-        if (prev >= 88) return prev;
-        const step = Math.max(1, Math.floor((90 - prev) / 4));
-        const next = Math.min(88, prev + step);
-        onLoadProgress?.(next, 'Buffering video stream...', true);
-        return next;
-      });
-    }, 250);
-
     if (media.kind === 'yt') {
       let isMounted = true;
-      updateProgress(35, 'Initializing YouTube player...', true);
-
       const initYT = () => {
         const holder = document.getElementById('yt-player-slot');
         if (!holder || !window.YT || !window.YT.Player) return;
         try {
-          updateProgress(55, 'Loading YouTube video stream...', true);
           const ytPlayer = new window.YT.Player(holder, {
             videoId: media.id,
             width: '100%',
@@ -619,7 +553,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
                 ytRef.current = ytPlayer;
                 const d = ytPlayer.getDuration() || 0;
                 setDuration(d);
-                updateProgress(90, 'Buffering YouTube stream...', true);
                 // Initial sync upon load
                 const initialTarget = getDesiredCurrentTime();
                 const shouldPlay = desiredRef.current.playing;
@@ -633,7 +566,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
                     ytPlayer.playVideo();
                   } catch {}
                 }
-                finishLoading('YouTube stream ready!');
                 if (onReady) onReady();
                 ytPollRef.current = setInterval(() => {
                   try {
@@ -649,9 +581,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
                 const state = e.data;
                 const curT = ytPlayer.getCurrentTime() || 0;
                 setCurrentTime(curT);
-                if (state === 1 || state === 2 || state === 5) {
-                  finishLoading('Ready!');
-                }
                 if (isApplyingRemoteRef.current) {
                   return;
                 }
@@ -667,21 +596,11 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
                 }
               },
               onError: (err) => {
-                if (progressTimerRef.current) {
-                  clearInterval(progressTimerRef.current);
-                  progressTimerRef.current = null;
-                }
-                setIsMediaLoading(false);
                 setLoadError(`YouTube video playback restricted or unavailable (code ${err.data}).`);
               },
             },
           });
         } catch {
-          if (progressTimerRef.current) {
-            clearInterval(progressTimerRef.current);
-            progressTimerRef.current = null;
-          }
-          setIsMediaLoading(false);
           setLoadError('Failed to initialize YouTube embedded player.');
         }
       };
@@ -709,12 +628,8 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
       // Direct video or HLS
       const video = videoRef.current;
       if (!video) return;
-
-      updateProgress(35, 'Connecting to media server...', true);
-
       const handleInitialSync = () => {
         setDuration(video.duration || 0);
-        updateProgress(85, 'Metadata loaded, buffering...', true);
         const initialTarget = getDesiredCurrentTime();
         const shouldPlay = desiredRef.current.playing;
         isApplyingRemoteRef.current = true;
@@ -736,43 +651,20 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
         setTimeout(() => {
           isApplyingRemoteRef.current = false;
         }, 400);
-        finishLoading('Stream ready!');
         if (onReady) onReady();
       };
 
       video.addEventListener('loadedmetadata', handleInitialSync, { once: true });
-
       if (media.kind === 'hls') {
         if (Hls.isSupported()) {
           const hls = new Hls({
             enableWorker: true,
             lowLatencyMode: true,
           });
-          updateProgress(45, 'Fetching HLS manifest (.m3u8)...', true);
           hls.loadSource(media.url);
           hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_LOADING, () => {
-            updateProgress(50, 'Loading HLS stream playlist...', true);
-          });
-          hls.on(Hls.Events.MANIFEST_LOADED, () => {
-            updateProgress(65, 'Manifest loaded, reading stream tracks...', true);
-          });
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            updateProgress(80, 'Multi-bitrate tracks ready, buffering stream...', true);
-          });
-          hls.on(Hls.Events.FRAG_LOADING, () => {
-            updateProgress(88, 'Buffering video segments...', true);
-          });
-          hls.on(Hls.Events.FRAG_LOADED, () => {
-            updateProgress(95, 'Video segment cached, ready...', true);
-          });
           hls.on(Hls.Events.ERROR, (_, data) => {
             if (data.fatal) {
-              if (progressTimerRef.current) {
-                clearInterval(progressTimerRef.current);
-                progressTimerRef.current = null;
-              }
-              setIsMediaLoading(false);
               setLoadError('HLS stream loading failed. The host server might block cross-origin playback.');
             }
           });
@@ -780,7 +672,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = media.url;
         } else {
-          setIsMediaLoading(false);
           setLoadError('HLS streams (.m3u8) are not natively supported in this browser.');
         }
       } else {
@@ -791,7 +682,7 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     return () => {
       destroyCurrentPlayer();
     };
-  }, [url, destroyCurrentPlayer, getDesiredCurrentTime, onLocalPlay, onLocalPause, onReady, updateProgress, finishLoading, onLoadProgress]);
+  }, [url, destroyCurrentPlayer, getDesiredCurrentTime, onLocalPlay, onLocalPause, onReady]);
 
   // Fullscreen toggle
   const toggleFullscreen = () => {
@@ -840,28 +731,9 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
   }, [isFullscreen]);
 
   // HTML5 Video Event Listeners
-  const onVideoLoadStart = () => {
-    updateProgress(25, 'Connecting to video stream...', true);
-  };
-
-  const onVideoProgress = () => {
-    const v = videoRef.current;
-    if (v && v.buffered.length > 0 && v.duration > 0) {
-      const bufferedEnd = v.buffered.end(v.buffered.length - 1);
-      const ratio = Math.min(1, bufferedEnd / v.duration);
-      const pct = Math.max(35, Math.min(96, Math.round(ratio * 100)));
-      updateProgress(pct, `Buffering media (${pct}%)...`, true);
-    }
-  };
-
-  const onVideoCanPlay = () => {
-    finishLoading('Video ready to play!');
-  };
-
   const onVideoPlay = () => {
     setIsPlaying(true);
     setShowTapToPlay(false);
-    finishLoading('Playing video');
     if (isApplyingRemoteRef.current) return;
     if (videoRef.current) {
       onLocalPlay(videoRef.current.currentTime);
@@ -893,11 +765,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
   };
 
   const onVideoError = () => {
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-    setIsMediaLoading(false);
     setLoadError('Could not play video. Ensure the URL is an accessible, direct video file (.mp4, .webm, .m3u8).');
   };
 
@@ -1031,9 +898,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
               className="w-full h-full object-contain bg-black"
               playsInline
               preload="auto"
-              onLoadStart={onVideoLoadStart}
-              onProgress={onVideoProgress}
-              onCanPlay={onVideoCanPlay}
               onPlay={onVideoPlay}
               onPause={onVideoPause}
               onTimeUpdate={onVideoTimeUpdate}
@@ -1285,54 +1149,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
           >
             Join Playback ({formatTime(getDesiredCurrentTime())})
           </button>
-        </div>
-      )}
-
-      {/* Top Ambient Stream Loading Bar */}
-      {url && isMediaLoading && !loadError && (
-        <div className="absolute top-0 inset-x-0 h-1 bg-white/10 z-40 overflow-hidden pointer-events-none">
-          <div
-            className="h-full bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 transition-all duration-300 ease-out shadow-[0_0_12px_rgba(99,102,241,0.9)]"
-            style={{ width: `${mediaProgress}%` }}
-          />
-        </div>
-      )}
-
-      {/* Video Loading Progress Overlay */}
-      {url && isMediaLoading && !loadError && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-30 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-200 select-none">
-          {/* Animated Spinner & Progress Badge */}
-          <div className="relative mb-5 flex items-center justify-center">
-            <div className="w-20 h-20 rounded-full border-2 border-indigo-500/20 animate-ping absolute" />
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[#1c1f30] to-[#121422] border border-indigo-500/40 flex items-center justify-center relative shadow-2xl shadow-indigo-500/20">
-              <Loader2 className="w-9 h-9 text-indigo-400 animate-spin" />
-            </div>
-            <div className="absolute -bottom-2.5 -right-2.5 px-2.5 py-0.5 rounded-full bg-indigo-600 text-[11px] font-mono font-bold text-white shadow-lg border border-indigo-400/40">
-              {mediaProgress}%
-            </div>
-          </div>
-
-          <h4 className="text-base font-bold text-white mb-1 tracking-tight flex items-center gap-2">
-            <span>Loading Video</span>
-            <span className="font-mono text-indigo-400 font-extrabold text-sm">{mediaProgress}%</span>
-          </h4>
-
-          <p className="text-xs text-slate-400 max-w-sm mb-4 font-mono truncate">
-            {loadStageText}
-          </p>
-
-          {/* Progress Bar Track */}
-          <div className="w-full max-w-xs h-2 bg-white/10 rounded-full overflow-hidden p-0.5 border border-white/10 shadow-inner">
-            <div
-              className="h-full bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 rounded-full transition-all duration-300 ease-out"
-              style={{ width: `${mediaProgress}%` }}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 mt-3 text-[11px] text-slate-500 font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Synchronizing media with room</span>
-          </div>
         </div>
       )}
 
